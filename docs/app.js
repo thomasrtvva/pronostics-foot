@@ -313,6 +313,13 @@ async function viewMatch(id) {
         <div class="kpi"><b>${dec(S.exp_cards, 1)}</b><span>cartons attendus</span></div>
       </div>
     </div>`;
+    const oc = pred.odds_snapshot?.close || m.odds?.close || {};
+    const xx = { pH: pred.p_home, pD: pred.p_draw, pA: pred.p_away, o25: pred.p_o25 ?? NaN, btts: pred.p_btts ?? NaN, c95: pred.p_corners_o95 ?? NaN, k45: pred.p_cards_o45 ?? NaN,
+      oH: oc.h, oD: oc.d, oA: oc.a, line: oc.line, over: oc.over, under: oc.under, ftH: m.state === "post" ? m.ft_home : null, ftA: m.state === "post" ? m.ft_away : null,
+      corners: m.stats ? (Number(m.stats.home?.corners) + Number(m.stats.away?.corners)) : null, cards: m.stats ? (Number(m.stats.home?.yellow || 0) + Number(m.stats.away?.yellow || 0) + Number(m.stats.home?.red || 0) + Number(m.stats.away?.red || 0)) : null };
+    const pk = picksFor(xx, m.home?.short_name || H, m.away?.short_name || A);
+    predHTML += `<div class="card"><h2>Les paris du site</h2><p class="muted small">Mise fictive de ${STAKE} € par pari. Détails et résultats cumulés dans <a href="#paris">Paris du site</a>.</p>
+      <div class="picks">${STRATS.map((st) => pickChip(st, pk[st.id], m.state === "post" ? xx : null)).join("")}</div></div>`;
   } else if (m.state === "pre") {
     const eta = new Date(new Date(m.kickoff).getTime() - 60 * 60000).toISOString();
     predHTML = `<div class="card"><h2>Pronostic</h2><p class="notice">Le pronostic sera publié dès l'annonce des compositions officielles, en général vers <b>${fmtTime(eta)}</b>. La page se met à jour toute seule.</p></div>`;
@@ -394,6 +401,150 @@ async function viewMatch(id) {
       </div></div></div>
     ${marketsHTML}`;
   window.scrollTo(0, 0);
+}
+
+
+/* ---------- the site's own bets ---------- */
+const MARGIN = 0.05, STAKE = 10, BANK = 1000;
+const STRATS = [
+  { id: "valeur", name: "Valeur", color: "var(--accent)", desc: "Mise seulement quand la vraie cote du bookmaker est plus haute que ce que vaut le pari selon le modèle (gain attendu d'au moins 5 %, probabilité d'au moins 30 %)." },
+  { id: "confiance", name: "Confiance", color: "var(--home)", desc: "Le pari le plus probable du match parmi ceux qui rapportent au moins 1,40." },
+  { id: "favori", name: "Favori", color: "var(--away)", desc: "Toujours le favori du modèle sur le résultat (1N2)." },
+];
+const siteOdds = (p) => Math.max(1.01, Math.floor(100 / (p * (1 + MARGIN))) / 100);
+function candidates(x, H, A) {
+  const real = x.oH > 1 && x.oD > 1 && x.oA > 1;
+  const dk25 = Number(x.line) === 2.5 && x.over > 1 && x.under > 1;
+  const c = [];
+  const add = (key, label, p, odds, direct = true) => {
+    if (!(p > 0.001 && p < 0.999)) return;
+    c.push({ key, label, p, odds: odds ? Math.round(odds * 100) / 100 : siteOdds(p), src: odds ? (direct ? "real" : "derived") : "site" });
+  };
+  add("1", `Victoire ${H}`, x.pH, real && x.oH); add("x", "Match nul", x.pD, real && x.oD); add("2", `Victoire ${A}`, x.pA, real && x.oA);
+  add("1x", `${H} ou nul`, x.pH + x.pD, real && 1 / (1 / x.oH + 1 / x.oD), false);
+  add("x2", `Nul ou ${A}`, x.pD + x.pA, real && 1 / (1 / x.oD + 1 / x.oA), false);
+  add("12", `${H} ou ${A}`, x.pH + x.pA, real && 1 / (1 / x.oH + 1 / x.oA), false);
+  if (isFinite(x.o25)) { add("o25", "Plus de 2,5 buts", x.o25, dk25 && x.over); add("u25", "Moins de 2,5 buts", 1 - x.o25, dk25 && x.under); }
+  if (isFinite(x.btts)) { add("by", "Les deux équipes marquent", x.btts, null); add("bn", "Une équipe au moins ne marque pas", 1 - x.btts, null); }
+  if (isFinite(x.c95)) { add("co", "Plus de 9,5 corners", x.c95, null); add("cu", "Moins de 9,5 corners", 1 - x.c95, null); }
+  if (isFinite(x.k45)) { add("ko", "Plus de 4,5 cartons", x.k45, null); add("ku", "Moins de 4,5 cartons", 1 - x.k45, null); }
+  return c;
+}
+function picksFor(x, H, A) {
+  const c = candidates(x, H, A);
+  const out = {};
+  const val = c.filter((s) => s.src === "real" && s.p >= 0.3).map((s) => ({ ...s, ev: s.p * s.odds - 1 })).filter((s) => s.ev >= 0.05).sort((a, b) => b.ev - a.ev)[0];
+  out.valeur = val || null;
+  out.confiance = c.filter((s) => s.odds >= 1.4).sort((a, b) => b.p - a.p)[0] || null;
+  out.favori = c.filter((s) => ["1", "x", "2"].includes(s.key)).sort((a, b) => b.p - a.p)[0] || null;
+  for (const k in out) if (out[k]) out[k].ev = out[k].p * out[k].odds - 1;
+  return out;
+}
+function settle(key, x) {
+  if (x.ftH == null || x.ftA == null) return null;
+  const h = x.ftH, a = x.ftA, g = h + a;
+  switch (key) {
+    case "1": return h > a; case "x": return h === a; case "2": return h < a;
+    case "1x": return h >= a; case "x2": return h <= a; case "12": return h !== a;
+    case "o25": return g > 2.5; case "u25": return g < 2.5;
+    case "by": return h > 0 && a > 0; case "bn": return !(h > 0 && a > 0);
+    case "co": return x.corners == null ? "void" : x.corners > 9.5; case "cu": return x.corners == null ? "void" : x.corners < 9.5;
+    case "ko": return x.cards == null ? "void" : x.cards > 4.5; case "ku": return x.cards == null ? "void" : x.cards < 4.5;
+  }
+  return null;
+}
+const srcLabel = (s) => (s === "real" ? "cote DraftKings" : s === "derived" ? "cote déduite de DraftKings" : `cote Avant-Match (marge ${Math.round(MARGIN * 100)} %)`);
+function pickChip(st, pk, x) {
+  if (!pk) return `<div class="pick none"><b>${esc(st.name)}</b><span class="muted small">Pas de pari sur ce match</span></div>`;
+  const r = x ? settle(pk.key, x) : null;
+  const res = r === true ? `<span class="pill ok">Gagné +${dec(STAKE * (pk.odds - 1))} €</span>` : r === false ? `<span class="pill ko">Perdu −${STAKE} €</span>` : r === "void" ? `<span class="pill">Annulé</span>` : "";
+  return `<div class="pick" style="--c:${st.color}"><b>${esc(st.name)}</b><span>${esc(pk.label)}</span>
+    <span class="num">@ ${dec(pk.odds)}</span><span class="muted small">${esc(srcLabel(pk.src))} · proba ${pct(pk.p)} · gain attendu ${pk.ev >= 0 ? "+" : ""}${pct(pk.ev, 1)}</span>${res}</div>`;
+}
+function runBank(rows, sid) {
+  let bank = BANK, peak = BANK, dd = 0, n = 0, won = 0, staked = 0;
+  const pts = [];
+  const hist = [];
+  for (const r of rows) {
+    const pk = r.picks[sid]; if (!pk) continue;
+    const res = settle(pk.key, r); if (res === null || res === "void") continue;
+    n++; staked += STAKE;
+    const gain = res ? STAKE * (pk.odds - 1) : -STAKE; if (res) won++;
+    bank += gain; peak = Math.max(peak, bank); dd = Math.max(dd, peak - bank);
+    pts.push([r.ko, bank]); hist.push({ r, pk, res, gain });
+  }
+  return { n, won, staked, profit: bank - BANK, bank, dd, pts, hist };
+}
+function bankChart(el, series) {
+  const draw = () => {
+    const W = el.clientWidth, Hh = el.clientHeight, padL = W < 520 ? 44 : 56, padB = 26;
+    const all = series.flatMap((s) => s.pts);
+    if (!all.length || !W) { el.innerHTML = ""; return; }
+    const x0 = Math.min(...all.map((p) => p[0])), x1 = Math.max(...all.map((p) => p[0]));
+    const ys = all.map((p) => p[1]).concat([BANK]);
+    let y0 = Math.min(...ys), y1 = Math.max(...ys); const padY = Math.max(20, (y1 - y0) * 0.08); y0 -= padY; y1 += padY;
+    const X = (v) => padL + (x1 === x0 ? 0.5 : (v - x0) / (x1 - x0)) * (W - padL - 12);
+    const Y = (v) => 10 + (1 - (v - y0) / (y1 - y0)) * (Hh - 10 - padB);
+    const step = Math.pow(10, Math.floor(Math.log10((y1 - y0) / 4))); const tk = []; for (let v = Math.ceil(y0 / step) * step; v <= y1; v += step) tk.push(v);
+    const ticks = tk.length > 7 ? tk.filter((_, i) => i % 2 === 0) : tk;
+    const dfmt = (t) => new Intl.DateTimeFormat("fr-BE", { timeZone: TZ, month: "short", year: "2-digit" }).format(new Date(t * 1000));
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Évolution de la cagnotte">
+      ${ticks.map((t) => `<line x1="${padL}" x2="${W - 12}" y1="${Y(t)}" y2="${Y(t)}" stroke="var(--line)"/><text x="${padL - 6}" y="${Y(t) + 4}" text-anchor="end" font-size="12" fill="var(--muted)">${Math.round(t)} €</text>`).join("")}
+      <line x1="${padL}" x2="${W - 12}" y1="${Y(BANK)}" y2="${Y(BANK)}" stroke="var(--muted)" stroke-dasharray="4 4"/>
+      <text x="${padL}" y="${Hh - 6}" font-size="12" fill="var(--muted)">${dfmt(x0)}</text><text x="${W - 12}" y="${Hh - 6}" text-anchor="end" font-size="12" fill="var(--muted)">${dfmt(x1)}</text>
+      ${series.map((s) => s.pts.length ? `<polyline fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" points="${[[x0, BANK], ...s.pts].map((p) => `${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join(" ")}"/>` : "").join("")}
+    </svg>`;
+  };
+  draw();
+  new ResizeObserver(draw).observe(el);
+}
+function stratBlock(rows, title, note, idp) {
+  const res = STRATS.map((st) => ({ st, ...runBank(rows, st.id) }));
+  if (!res.some((r) => r.n)) return `<div class="card"><h2>${title}</h2><p class="muted">${note}</p><p class="notice">Pas encore de pari terminé dans cette série. Les premiers résultats arrivent après les matchs de ce soir.</p></div>`;
+  const last = res.flatMap((r) => r.hist.map((h) => ({ ...h, st: r.st }))).sort((a, b) => b.r.ko - a.r.ko).slice(0, 25);
+  return `<div class="card"><h2>${title}</h2><p class="muted small">${note}</p>
+    <div class="scroll"><table class="stack"><thead><tr><th>Style</th><th class="n">Paris</th><th class="n">Gagnés</th><th class="n">Résultat</th><th class="n">Rendement</th><th class="n">Cagnotte</th><th class="n">Pire baisse</th></tr></thead><tbody>
+    ${res.map((r) => `<tr><td data-l="Style"><b style="color:${r.st.color}">●</b> ${esc(r.st.name)}</td><td class="n" data-l="Paris">${r.n}</td><td class="n" data-l="Gagnés">${r.n ? pct(r.won / r.n, 1) : "–"}</td>
+      <td class="n" data-l="Résultat"><span class="ev ${r.profit >= 0 ? "pos" : "neg"}">${r.profit >= 0 ? "+" : ""}${dec(r.profit, 0)} €</span></td><td class="n" data-l="Rendement">${r.staked ? pct(r.profit / r.staked, 1) : "–"}</td>
+      <td class="n" data-l="Cagnotte">${dec(r.bank, 0)} €</td><td class="n" data-l="Pire baisse">−${dec(r.dd, 0)} €</td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="chart" id="${idp}-chart" style="margin-top:14px"></div>
+    <div class="legend">${STRATS.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}<span><i style="background:var(--muted)"></i>Cagnotte de départ (${BANK} €)</span></div>
+    <details style="margin-top:12px"><summary>Les 25 derniers paris terminés</summary><div class="scroll"><table class="stack"><thead><tr><th>Date</th><th>Match</th><th>Style</th><th>Pari</th><th class="n">Cote</th><th class="n">Résultat</th></tr></thead><tbody>
+      ${last.map((h) => `<tr><td data-l="Date" class="small muted">${fmtShort(new Date(h.r.ko * 1000).toISOString())}</td><td data-l="Match"><a href="#m-${esc(h.r.id)}">${esc(h.r.h)} - ${esc(h.r.a)}</a> <b>${h.r.ftH}-${h.r.ftA}</b></td><td data-l="Style">${esc(h.st.name)}</td><td data-l="Pari">${esc(h.pk.label)}</td><td class="n" data-l="Cote">${dec(h.pk.odds)}</td><td class="n" data-l="Résultat"><span class="ev ${h.res ? "pos" : "neg"}">${h.gain >= 0 ? "+" : ""}${dec(h.gain)} €</span></td></tr>`).join("")}
+    </tbody></table></div></details></div>`;
+}
+
+async function viewBets() {
+  setNav("paris"); clearInterval(state.timer);
+  app.innerHTML = `<section class="hero band"><div class="wrap"><h1>Les paris du site</h1>
+    <p>Pour chaque match pronostiqué, le site choisit lui-même ses paris selon trois styles, avec une mise fictive de ${STAKE} € et une cagnotte de départ de ${BANK} €. Il utilise les vraies cotes DraftKings quand elles existent (résultat, plus/moins 2,5 buts), sinon sa propre cote : la cote juste moins une marge de ${Math.round(MARGIN * 100)} %, comme un bookmaker.</p>
+    ${chipsHTML()}</div></section>
+    <div class="wrap band" id="bets"><div class="skeleton"></div></div>`;
+  bindChips(viewBets);
+  let raw;
+  try { raw = await rpc("sim_data"); } catch { document.getElementById("bets").innerHTML = `<p class="notice">Données indisponibles pour l'instant.</p>`; return; }
+  const n = (v) => (v == null ? null : Number(v));
+  const rows = raw.map((r) => ({ id: r[0], mode: r[1], ko: Number(r[2]), comp: r[3], h: r[4], a: r[5], pH: n(r[6]), pD: n(r[7]), pA: n(r[8]), o25: n(r[9]) ?? NaN, btts: n(r[10]) ?? NaN, c95: n(r[11]) ?? NaN, k45: n(r[12]) ?? NaN,
+    oH: n(r[13]), oD: n(r[14]), oA: n(r[15]), line: n(r[16]), over: n(r[17]), under: n(r[18]), ftH: r[19], ftA: r[20], corners: r[21], cards: r[22], state: r[23] }))
+    .filter((r) => state.comp === "all" || r.comp === state.comp);
+  rows.forEach((r) => (r.picks = picksFor(r, r.h, r.a)));
+  const open = rows.filter((r) => r.mode === "live" && r.state !== "post");
+  const live = rows.filter((r) => r.mode === "live" && r.state === "post");
+  const bt = rows.filter((r) => r.mode === "backtest" && r.state === "post");
+  document.getElementById("bets").innerHTML = `
+    <div class="card"><h2>Les trois styles</h2>${STRATS.map((s) => `<p><b style="color:${s.color}">● ${esc(s.name)}</b> : ${esc(s.desc)}</p>`).join("")}</div>
+    <div class="card"><h2>Paris en cours</h2>
+      ${open.length ? open.map((r) => `<div class="openm"><a href="#m-${esc(r.id)}"><b>${esc(r.h)} - ${esc(r.a)}</b></a> <span class="muted small">${fmtShort(new Date(r.ko * 1000).toISOString())} à ${fmtTime(new Date(r.ko * 1000).toISOString())}${r.state === "in" ? " · en cours" : ""}</span>
+        <div class="picks">${STRATS.map((s) => pickChip(s, r.picks[s.id], null)).join("")}</div></div>`).join("")
+        : `<p class="muted">Aucun pari en cours. Les paris du site sont choisis en même temps que le pronostic, dès l'annonce des compositions.</p>`}
+    </div>
+    ${stratBlock(live, "En direct depuis la mise en ligne", "Paris choisis au moment de la publication du pronostic, avant le coup d'envoi, avec les cotes relevées à ce moment-là.", "live")}
+    ${stratBlock(bt, "Simulation sur les matchs passés", "Les mêmes règles appliquées aux pronostics du test sur les matchs passés (modèle réentraîné semaine par semaine), avec les cotes de clôture. C'est une simulation : aucun pari n'a été placé.", "bt")}
+    <p class="notice small">Ces paris sont fictifs et servent à mesurer le modèle. Un rendement négatif est le résultat normal face à la marge des bookmakers. Si tu paries pour de vrai, fixe-toi un budget ; aide gratuite en Belgique : joueurs.aide-en-ligne.be.</p>`;
+  const series = (rs) => STRATS.map((st) => ({ color: st.color, pts: runBank(rs, st.id).pts }));
+  const lc = document.getElementById("live-chart"); if (lc) bankChart(lc, series(live));
+  const bc = document.getElementById("bt-chart"); if (bc) bankChart(bc, series(bt));
 }
 
 /* ---------- reliability ---------- */
@@ -553,6 +704,7 @@ async function route() {
     if (h.startsWith("m-")) await viewMatch(h.slice(2));
     else if (h === "fiabilite") await viewEval();
     else if (h === "methode") await viewMethod();
+    else if (h === "paris") await viewBets();
     else await viewHome();
   } catch (e) {
     console.error(e);

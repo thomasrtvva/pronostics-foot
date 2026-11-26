@@ -138,6 +138,14 @@ button.link{background:none;border:0;color:var(--pitch);font:600 15px "Barlow";c
 .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:14px;color:var(--muted);margin-top:8px}
 .legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:6px;vertical-align:-1px}
 
+.picks{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-top:10px}
+.pick{border:1px solid var(--line);border-left:5px solid var(--c,var(--line));border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:3px}
+.pick.none{border-left-color:var(--line);opacity:.8}
+.pick .num{font:700 22px "Barlow Condensed"}
+.pick .pill{align-self:flex-start;margin-top:4px}
+.openm{padding:12px 0;border-bottom:1px solid var(--line)}
+.openm:last-child{border-bottom:0}
+details summary{cursor:pointer;font-weight:600;min-height:40px;display:flex;align-items:center}
 footer{border-top:1px solid var(--line);margin-top:48px;padding:24px 0 40px;color:var(--muted);font-size:14px}
 .prose p,.prose li{max-width:72ch}
 .prose h2{margin-top:34px}
