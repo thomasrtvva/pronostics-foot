@@ -2,7 +2,8 @@
 // with league-level effects, time decay and lineup-based covariates.
 
 export const LEAGUES = ["bel.1", "eng.1", "esp.1", "ita.1", "ger.1", "fra.1"];
-export const MODEL_VERSION = "v1.0";
+export const MODEL_VERSION = "v1.1";
+export const SHARPEN = 1.35; // estimated on the walk-forward test (Brier 0,582 -> 0,578)
 
 export interface Feat { lrA: number; lc: number; gk: number; sr: number; ok: boolean }
 export interface Row {
@@ -37,7 +38,7 @@ export interface Params {
   version: string; created_at: string; ref: string; n_matches: number;
   teamLg: Record<string, string>;
   goals: SubModel; corners: SubModel; shots: SubModel; sot: SubModel; cards: SubModel;
-  rho: number; phi: number; prof: number[]; xgScale: number; blend: number; nEff: Record<string, number>;
+  rho: number; phi: number; prof: number[]; xgScale: number; blend: number; nEff: Record<string, number>; sharpen?: number;
   priors: Record<string, { g: number; x: number; a: number; sh: number; sot: number; c: number; min: number }>;
   stats: Record<string, number>;
 }
@@ -164,7 +165,7 @@ export function fitAll(rows: Row[], teamLg: Record<string, string>, extra: { pro
   // Dixon-Coles rho by grid search on actual 90-min scores
   const base: Params = {
     version: MODEL_VERSION, created_at: new Date().toISOString(), ref: new Date().toISOString(), n_matches: rows.length, teamLg,
-    goals, corners, shots, sot, cards, rho: 0, phi: extra.phi, prof: extra.prof, xgScale, blend, priors: extra.priors, stats: {}, nEff: {},
+    goals, corners, shots, sot, cards, rho: 0, phi: extra.phi, prof: extra.prof, xgScale, blend, priors: extra.priors, stats: {}, nEff: {}, sharpen: 1,
   };
   for (const r of rows) { const w = wOf(r.age); base.nEff[r.home] = (base.nEff[r.home] ?? 0) + w; base.nEff[r.away] = (base.nEff[r.away] ?? 0) + w; }
   for (const k in base.nEff) base.nEff[k] = Math.round(base.nEff[k] * 10) / 10;
@@ -181,6 +182,7 @@ export function fitAll(rows: Row[], teamLg: Record<string, string>, extra: { pro
     if (ll > bestLL) { bestLL = ll; best = Math.round(rho * 100) / 100; }
   }
   base.rho = best;
+  base.sharpen = SHARPEN;
   return base;
 }
 
@@ -194,6 +196,11 @@ export function lambdas(p: Params, which: "goals" | "corners" | "shots" | "sot" 
   let eh = m.mu0 + c.mu + (neutral ? 0 : c.h) + lgH.A + tH[0] + lgA.D + tA[1];
   let ea = m.mu0 + c.mu + lgA.A + tA[0] + lgH.D + tH[1];
   for (let j = 0; j < NB; j++) { eh += m.beta[j] * xh[j]; ea += m.beta[j] * xa[j]; }
+  if (which === "goals" && p.sharpen && p.sharpen !== 1) {
+    // calibration: the shrunken ratings are too cautious, so the log goal ratio is stretched (k estimated on the walk-forward test)
+    const mid = (eh + ea) / 2, half = (eh - ea) / 2 * p.sharpen;
+    eh = mid + half; ea = mid - half;
+  }
   return { lh: Math.exp(eh), la: Math.exp(ea), xh, xa };
 }
 
@@ -468,7 +475,7 @@ export function explain(p: Params, m: { comp: string; neutral: boolean; home_id:
   const xh = covs(fh, fa), xa = covs(fa, fh);
   const mult = (x: number[]) => BETA_NAMES.map((n, j) => ({ name: n, x: x[j], mult: Math.exp(g.beta[j] * x[j]) }));
   return {
-    base: Math.exp(g.mu0 + c.mu), home_adv: m.neutral ? 1 : Math.exp(c.h),
+    base: Math.exp(g.mu0 + c.mu), home_adv: m.neutral ? 1 : Math.exp(c.h), sharpen: p.sharpen ?? 1,
     home: { attack: att(lgH, tH), defence: def(lgH, tH), league: lgH, rest_days: restH, lineup: fh, effects: mult(xh) },
     away: { attack: att(lgA, tA), defence: def(lgA, tA), league: lgA, rest_days: restA, lineup: fa, effects: mult(xa) },
     beta: Object.fromEntries(BETA_NAMES.map((n, j) => [n, g.beta[j]])),

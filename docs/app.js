@@ -331,7 +331,7 @@ async function viewMatch(id) {
       ${(f[s].effects || []).filter((e) => Math.abs(Math.log(e.mult)) > 0.003).map((e) => factorBar(EFFECT_LABEL[e.name] || e.name, e.mult, "up")).join("")}
       <p class="small muted">Jours de repos : ${f[s].rest_days != null ? dec(f[s].rest_days, 0) : "–"}${f[s].lineup?.ok ? "" : " · compo non prise en compte"}</p>`;
     whyHTML = `<div class="card"><h2>Pourquoi ce pronostic</h2>
-      <p class="small muted">Buts attendus = moyenne de la compétition (${dec(f.base, 2)}) × avantage du terrain (×${dec(f.home_adv, 2)} pour l'équipe à domicile) × force offensive × faiblesse défensive adverse × effets de la compo et de la fatigue.</p>
+      <p class="small muted">Buts attendus = moyenne de la compétition (${dec(f.base, 2)}) × avantage du terrain (×${dec(f.home_adv, 2)} pour l'équipe à domicile) × force offensive × faiblesse défensive adverse × effets de la compo et de la fatigue${f.sharpen > 1 ? `, puis l'écart entre les deux équipes est accentué (facteur de calibration ${dec(f.sharpen, 2)}, voir Méthode)` : ""}.</p>
       ${side("home", H)}${side("away", A)}
       ${f.market_weight > 0.01 ? `<p class="notice small">Une des deux équipes a peu de matchs dans les données (${dec(Math.min(f.n_eff?.home ?? 0, f.n_eff?.away ?? 0), 0)} matchs pondérés, souvent une équipe d'un championnat non suivi). Le modèle s'appuie donc à ${pct(f.market_weight)} sur les cotes du marché. Sans elles, il aurait prévu ${dec(f.model_lambdas?.lh)} – ${dec(f.model_lambdas?.la)} buts.</p>` : ""}</div>`;
   }
@@ -467,7 +467,7 @@ async function viewEval() {
   const favSim = (() => { let n = 0, pr = 0; for (const r of all) { if (!r.odds.every((x) => x > 1)) continue; const o = r.fh > r.fa ? 0 : r.fh === r.fa ? 1 : 2; const i = r.p.indexOf(Math.max(...r.p)); n++; pr += i === o ? 10 * (r.odds[i] - 1) : -10; } return { n, pr }; })();
   // per competition
   const comps = [...new Set(all.map((r) => r.comp))];
-  const perComp = comps.map((c) => ({ c, ...stats(all.filter((r) => r.comp === c)) })).sort((a, b) => b.n - a.n);
+  const perComp = comps.map((slug) => ({ ...stats(all.filter((r) => r.comp === slug)), slug })).sort((a, b) => b.n - a.n);
 
   box.innerHTML = `${block(live, "Pronostics publiés en direct", "Pronostics figés au moment de l'annonce des compos, avant le coup d'envoi.")}
     ${block(bt, "Test sur les matchs passés", "Simulation semaine par semaine : le modèle est réentraîné uniquement sur les matchs joués avant la semaine testée, avec les compos réellement alignées.")}
@@ -482,7 +482,7 @@ async function viewEval() {
       <tr><td>Toujours le favori du modèle</td><td class="n">${favSim.n}</td><td class="n">${favSim.n * 10} €</td><td class="n"><span class="ev ${favSim.pr >= 0 ? "pos" : "neg"}">${favSim.pr >= 0 ? "+" : ""}${dec(favSim.pr, 0)} €</span></td><td class="n">${favSim.n ? pct(favSim.pr / (favSim.n * 10), 1) : "–"}</td></tr>
       </tbody></table></div></div>
     <div class="card"><h2>Par compétition</h2><div class="scroll"><table class="stack"><thead><tr><th>Compétition</th><th class="n">Matchs</th><th class="n">Favori qui gagne</th><th class="n">Brier modèle</th><th class="n">Brier bookmaker</th><th class="n">Plus/moins 2,5</th></tr></thead><tbody>
-      ${perComp.map((s) => `<tr><td data-l="Compétition">${esc(compName(s.c))}</td><td class="n" data-l="Matchs">${s.n}</td><td class="n" data-l="Favori qui gagne">${pct(s.acc, 1)}</td><td class="n" data-l="Brier modèle">${dec(s.brM2 ?? s.br, 3)}</td><td class="n" data-l="Brier bookmaker">${s.brB != null ? dec(s.brB, 3) : "–"}</td><td class="n" data-l="Plus/moins 2,5">${pct(s.o25, 1)}</td></tr>`).join("")}
+      ${perComp.map((s) => `<tr><td data-l="Compétition">${esc(compName(s.slug))}</td><td class="n" data-l="Matchs">${s.n}</td><td class="n" data-l="Favori qui gagne">${pct(s.acc, 1)}</td><td class="n" data-l="Brier modèle">${dec(s.brM2 ?? s.br, 3)}</td><td class="n" data-l="Brier bookmaker">${s.brB != null ? dec(s.brB, 3) : "–"}</td><td class="n" data-l="Plus/moins 2,5">${pct(s.o25, 1)}</td></tr>`).join("")}
       </tbody></table></div></div>`;
   const pts = calib(all);
   const el = document.getElementById("cal");
@@ -523,7 +523,9 @@ async function viewMethod() {
         <li><b>Fatigue</b> : moins de 4 jours depuis le dernier match.</li>
       </ul>
       <p>L'importance de chacun de ces effets n'est pas choisie à la main : elle est estimée sur l'historique des matchs.</p>
-      <h2>3 bis. Les équipes peu connues</h2>
+      <h2>3 bis. La calibration</h2>
+      <p>Pour ne pas surréagir à quelques résultats, les forces des équipes sont « tirées » vers la moyenne. Le test sur les matchs passés a montré que le modèle était alors trop prudent : quand il annonçait 54 %, l'équipe gagnait 62 % du temps. L'écart de force entre les deux équipes est donc accentué d'un facteur 1,35 (en échelle logarithmique), la valeur qui minimise l'erreur sur ce test.</p>
+      <h2>3 ter. Les équipes peu connues</h2>
       <p>En Coupe d'Europe, beaucoup d'adversaires viennent de championnats non suivis (Pays-Bas, Portugal, Autriche…) et n'ont que quelques matchs dans les données. Pour ces équipes seulement, le modèle mélange son estimation avec les buts attendus déduits des cotes du marché : plus l'équipe a peu de matchs, plus les cotes pèsent (au maximum 75 %). Les matchs entre équipes bien connues restent 100 % modèle.</p>
       <h2>4. Des buts attendus à tous les marchés</h2>
       <p>Le modèle en déduit la probabilité de chaque score (de 0-0 à 10-10), avec la correction de Dixon-Coles pour les petits scores. Tous les marchés liés aux buts en découlent : 1N2, double chance, plus/moins, les deux marquent, score exact, handicaps, mi-temps (environ ${info?.phi ? dec(100 * info.phi, 0) : "45"} % des buts tombent en 1re mi-temps).</p>
