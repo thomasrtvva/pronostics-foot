@@ -275,7 +275,7 @@ async function viewMatch(id) {
     [m] = await api(`matches?id=eq.${encodeURIComponent(id)}&select=*,home:teams!matches_home_id_fkey(*),away:teams!matches_away_id_fkey(*),predictions(*)`);
   } catch { app.innerHTML = `<div class="wrap band"><p class="notice">Match introuvable.</p></div>`; return; }
   if (!m) { app.innerHTML = `<div class="wrap band"><p class="notice">Match introuvable.</p></div>`; return; }
-  const before = m.kickoff;
+  const before = encodeURIComponent(new Date(m.kickoff).toISOString());
   const sel = "id,comp,kickoff,home_id,away_id,ft_home,ft_away,stats,home:teams!matches_home_id_fkey(short_name,name),away:teams!matches_away_id_fkey(short_name,name)";
   const [lineup, formH, formA, h2h, feats] = await Promise.all([
     api(`match_players?match_id=eq.${id}&select=player_id,team_id,starter,pos_abbr,formation_place,jersey,goals,assists,yellow,red,minutes,players(name,short_name)`).catch(() => []),
