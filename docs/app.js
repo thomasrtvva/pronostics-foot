@@ -462,10 +462,11 @@ function pickChip(st, pk, x) {
     <span class="num">@ ${dec(pk.odds)}</span><span class="muted small">${esc(srcLabel(pk.src))} · proba ${pct(pk.p)} · gain attendu ${pk.ev >= 0 ? "+" : ""}${pct(pk.ev, 1)}</span>${res}</div>`;
 }
 function runBank(rows, sid) {
-  let bank = BANK, peak = BANK, dd = 0, n = 0, won = 0, staked = 0;
+  let bank = BANK, peak = BANK, dd = 0, n = 0, won = 0, staked = 0, bust = null;
   const pts = [];
   const hist = [];
   for (const r of rows) {
+    if (bank < STAKE) { bust = bust ?? r.ko; break; }
     const pk = r.picks[sid]; if (!pk) continue;
     const res = settle(pk.key, r); if (res === null || res === "void") continue;
     n++; staked += STAKE;
@@ -473,7 +474,8 @@ function runBank(rows, sid) {
     bank += gain; peak = Math.max(peak, bank); dd = Math.max(dd, peak - bank);
     pts.push([r.ko, bank]); hist.push({ r, pk, res, gain });
   }
-  return { n, won, staked, profit: bank - BANK, bank, dd, pts, hist };
+  if (bank < STAKE && bust == null && pts.length) bust = pts[pts.length - 1][0];
+  return { n, won, staked, profit: bank - BANK, bank, dd, pts, hist, bust };
 }
 function bankChart(el, series) {
   const draw = () => {
@@ -502,11 +504,11 @@ function stratBlock(rows, title, note, idp) {
   const res = STRATS.map((st) => ({ st, ...runBank(rows, st.id) }));
   if (!res.some((r) => r.n)) return `<div class="card"><h2>${title}</h2><p class="muted">${note}</p><p class="notice">Pas encore de pari terminé dans cette série. Les premiers résultats arrivent après les matchs de ce soir.</p></div>`;
   const last = res.flatMap((r) => r.hist.map((h) => ({ ...h, st: r.st }))).sort((a, b) => b.r.ko - a.r.ko).slice(0, 25);
-  return `<div class="card"><h2>${title}</h2><p class="muted small">${note}</p>
+  return `<div class="card"><h2>${title}</h2><p class="muted small">${note} Quand la cagnotte n'a plus de quoi miser ${STAKE} €, le style s'arrête.</p>
     <div class="scroll"><table class="stack"><thead><tr><th>Style</th><th class="n">Paris</th><th class="n">Gagnés</th><th class="n">Résultat</th><th class="n">Rendement</th><th class="n">Cagnotte</th><th class="n">Pire baisse</th></tr></thead><tbody>
     ${res.map((r) => `<tr><td data-l="Style"><b style="color:${r.st.color}">●</b> ${esc(r.st.name)}</td><td class="n" data-l="Paris">${r.n}</td><td class="n" data-l="Gagnés">${r.n ? pct(r.won / r.n, 1) : "–"}</td>
       <td class="n" data-l="Résultat"><span class="ev ${r.profit >= 0 ? "pos" : "neg"}">${r.profit >= 0 ? "+" : ""}${dec(r.profit, 0)} €</span></td><td class="n" data-l="Rendement">${r.staked ? pct(r.profit / r.staked, 1) : "–"}</td>
-      <td class="n" data-l="Cagnotte">${dec(r.bank, 0)} €</td><td class="n" data-l="Pire baisse">−${dec(r.dd, 0)} €</td></tr>`).join("")}
+      <td class="n" data-l="Cagnotte">${r.bust ? `<span class="ev neg">vide le ${fmtShort(new Date(r.bust * 1000).toISOString())}</span>` : `${dec(r.bank, 0)} €`}</td><td class="n" data-l="Pire baisse">−${dec(r.dd, 0)} €</td></tr>`).join("")}
     </tbody></table></div>
     <div class="chart" id="${idp}-chart" style="margin-top:14px"></div>
     <div class="legend">${STRATS.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}<span><i style="background:var(--muted)"></i>Cagnotte de départ (${BANK} €)</span></div>
