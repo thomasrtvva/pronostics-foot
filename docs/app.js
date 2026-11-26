@@ -498,6 +498,7 @@ async function viewEval() {
       <text x="${X(0.5)}" y="${Hh - 4}" text-anchor="middle" font-size="12" fill="var(--muted)">probabilité annoncée</text>
     </svg>`;
   };
+  draw();
   const ro = new ResizeObserver(draw); ro.observe(el);
 }
 
