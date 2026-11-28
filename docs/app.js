@@ -319,7 +319,7 @@ async function viewMatch(id) {
       corners: m.stats ? (Number(m.stats.home?.corners) + Number(m.stats.away?.corners)) : null, cards: m.stats ? (Number(m.stats.home?.yellow || 0) + Number(m.stats.away?.yellow || 0) + Number(m.stats.home?.red || 0) + Number(m.stats.away?.red || 0)) : null };
     const pk = picksFor(xx, m.home?.short_name || H, m.away?.short_name || A);
     predHTML += `<div class="card"><h2>Les paris du site</h2><p class="muted small">Mise fictive de ${STAKE} € par pari. Détails et résultats cumulés dans <a href="#paris">Paris du site</a>.</p>
-      <div class="picks">${STRATS.map((st) => pickChip(st, pk[st.id], m.state === "post" ? xx : null)).join("")}</div></div>`;
+      <div class="picks">${STRATS.filter((st) => st.id !== "selection").map((st) => pickChip(st, pk[st.id], m.state === "post" ? xx : null)).join("")}</div></div>`;
   } else if (m.state === "pre") {
     const eta = new Date(new Date(m.kickoff).getTime() - 60 * 60000).toISOString();
     predHTML = `<div class="card"><h2>Pronostic</h2><p class="notice">Le pronostic sera publié dès l'annonce des compositions officielles, en général vers <b>${fmtTime(eta)}</b>. La page se met à jour toute seule.</p></div>`;
@@ -410,7 +410,24 @@ const STRATS = [
   { id: "valeur", name: "Valeur", color: "var(--accent)", desc: "Mise seulement quand la vraie cote du bookmaker est plus haute que ce que vaut le pari selon le modèle (gain attendu d'au moins 5 %, probabilité d'au moins 30 %)." },
   { id: "confiance", name: "Confiance", color: "var(--home)", desc: "Le pari le plus probable du match parmi ceux qui rapportent au moins 1,40." },
   { id: "favori", name: "Favori", color: "var(--away)", desc: "Toujours le favori du modèle sur le résultat (1N2)." },
+  { id: "selection", name: "Sélection du jour", color: "#c026d3", desc: "Au maximum 10 paris par jour : le favori, seulement quand le modèle et le bookmaker sont d'accord et que la vraie cote est entre 1,50 et 3,00. Les paris sont ajoutés au fil de la journée, dans l'ordre des matchs, jusqu'à 10." },
 ];
+const MAX_PER_DAY = 10;
+function assignSelection(rows) {
+  const perDay = {};
+  for (const r of rows) {
+    const f = r.picks.favori;
+    const real = r.oH > 1 && r.oD > 1 && r.oA > 1;
+    let ok = false;
+    if (f && real && f.src === "real" && f.odds >= 1.5 && f.odds <= 3) {
+      const bk = [r.oH, r.oD, r.oA]; const bf = ["1", "x", "2"][bk.indexOf(Math.min(...bk))];
+      ok = bf === f.key;
+    }
+    const day = dayKey(new Date(r.ko * 1000).toISOString()) + "|" + r.mode;
+    if (ok && (perDay[day] ?? 0) < MAX_PER_DAY) { perDay[day] = (perDay[day] ?? 0) + 1; r.picks.selection = f; }
+    else r.picks.selection = null;
+  }
+}
 const siteOdds = (p) => Math.max(1.01, Math.floor(100 / (p * (1 + MARGIN))) / 100);
 function candidates(x, H, A) {
   const real = x.oH > 1 && x.oD > 1 && x.oA > 1;
@@ -520,7 +537,7 @@ function stratBlock(rows, title, note, idp) {
 async function viewBets() {
   setNav("paris"); clearInterval(state.timer);
   app.innerHTML = `<section class="hero band"><div class="wrap"><h1>Les paris du site</h1>
-    <p>Pour chaque match pronostiqué, le site choisit lui-même ses paris selon trois styles, avec une mise fictive de ${STAKE} € et une cagnotte de départ de ${BANK} €. Il utilise les vraies cotes DraftKings quand elles existent (résultat, plus/moins 2,5 buts), sinon sa propre cote : la cote juste moins une marge de ${Math.round(MARGIN * 100)} %, comme un bookmaker.</p>
+    <p>Pour chaque match pronostiqué, le site choisit lui-même ses paris selon plusieurs styles, dont une sélection de 10 paris maximum par jour,, avec une mise fictive de ${STAKE} € et une cagnotte de départ de ${BANK} €. Il utilise les vraies cotes DraftKings quand elles existent (résultat, plus/moins 2,5 buts), sinon sa propre cote : la cote juste moins une marge de ${Math.round(MARGIN * 100)} %, comme un bookmaker.</p>
     ${chipsHTML()}</div></section>
     <div class="wrap band" id="bets"><div class="skeleton"></div></div>`;
   bindChips(viewBets);
@@ -531,11 +548,23 @@ async function viewBets() {
     oH: n(r[13]), oD: n(r[14]), oA: n(r[15]), line: n(r[16]), over: n(r[17]), under: n(r[18]), ftH: r[19], ftA: r[20], corners: r[21], cards: r[22], state: r[23] }))
     .filter((r) => state.comp === "all" || r.comp === state.comp);
   rows.forEach((r) => (r.picks = picksFor(r, r.h, r.a)));
+  assignSelection(rows);
+  const today = dayKey(new Date().toISOString());
+  const todaySel = rows.filter((r) => r.mode === "live" && r.picks.selection && dayKey(new Date(r.ko * 1000).toISOString()) === today);
   const open = rows.filter((r) => r.mode === "live" && r.state !== "post");
   const live = rows.filter((r) => r.mode === "live" && r.state === "post");
   const bt = rows.filter((r) => r.mode === "backtest" && r.state === "post");
   document.getElementById("bets").innerHTML = `
-    <div class="card"><h2>Les trois styles</h2>${STRATS.map((s) => `<p><b style="color:${s.color}">● ${esc(s.name)}</b> : ${esc(s.desc)}</p>`).join("")}</div>
+    <div class="card"><h2>Sélection du jour · ${todaySel.length}/${MAX_PER_DAY}</h2>
+      <p class="muted small">Ta liste de paris à suivre aujourd'hui, ${MAX_PER_DAY} maximum. Elle se remplit au fil de la journée : chaque pari apparaît environ une heure avant son match, quand les compositions sont annoncées. Reviens avant chaque créneau de matchs.</p>
+      ${todaySel.length ? `<div class="scroll"><table class="stack"><thead><tr><th>Heure</th><th>Match</th><th>Pari</th><th class="n">Cote</th><th class="n">Proba</th><th class="n">Résultat</th></tr></thead><tbody>
+        ${todaySel.map((r) => { const pk = r.picks.selection; const res = r.state === "post" ? settle(pk.key, r) : null;
+          return `<tr><td data-l="Heure">${fmtTime(new Date(r.ko * 1000).toISOString())}</td><td data-l="Match"><a href="#m-${esc(r.id)}">${esc(r.h)} - ${esc(r.a)}</a>${r.state === "post" ? ` <b>${r.ftH}-${r.ftA}</b>` : r.state === "in" ? " <span class=\"pill live\">en cours</span>" : ""}</td>
+          <td data-l="Pari">${esc(pk.label)}</td><td class="n" data-l="Cote">${dec(pk.odds)}</td><td class="n" data-l="Proba">${pct(pk.p)}</td>
+          <td class="n" data-l="Résultat">${res === true ? `<span class="ev pos">+${dec(STAKE * (pk.odds - 1))} €</span>` : res === false ? `<span class="ev neg">−${STAKE} €</span>` : "à venir"}</td></tr>`; }).join("")}
+      </tbody></table></div>` : `<p class="notice">Pas encore de pari aujourd'hui. Les paris apparaissent dès que les compositions d'un match qualifié sont annoncées.</p>`}
+    </div>
+    <div class="card"><h2>Les styles</h2>${STRATS.map((s) => `<p><b style="color:${s.color}">● ${esc(s.name)}</b> : ${esc(s.desc)}</p>`).join("")}</div>
     <div class="card"><h2>Paris en cours</h2>
       ${open.length ? open.map((r) => `<div class="openm"><a href="#m-${esc(r.id)}"><b>${esc(r.h)} - ${esc(r.a)}</b></a> <span class="muted small">${fmtShort(new Date(r.ko * 1000).toISOString())} à ${fmtTime(new Date(r.ko * 1000).toISOString())}${r.state === "in" ? " · en cours" : ""}</span>
         <div class="picks">${STRATS.map((s) => pickChip(s, r.picks[s.id], null)).join("")}</div></div>`).join("")
